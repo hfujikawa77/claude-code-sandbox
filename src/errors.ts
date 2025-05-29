@@ -73,8 +73,8 @@ export abstract class ArduPilotError extends Error {
     this.code = code;
     this.severity = severity;
     this.timestamp = new Date();
-    this.details = details;
-    this.troubleshooting = troubleshooting;
+    if (details !== undefined) this.details = details;
+    if (troubleshooting !== undefined) this.troubleshooting = troubleshooting;
 
     // Errorクラスの適切な継承のため
     Object.setPrototypeOf(this, new.target.prototype);
@@ -137,7 +137,7 @@ export class CommandError extends ArduPilotError {
     ];
 
     super(code, message, ErrorSeverity.MEDIUM, details, troubleshooting);
-    this.commandType = commandType;
+    if (commandType !== undefined) this.commandType = commandType;
   }
 }
 
@@ -192,9 +192,9 @@ export class ParameterError extends ArduPilotError {
       expectedRange
     }, troubleshooting);
 
-    this.parameterName = parameterName;
-    this.providedValue = providedValue;
-    this.expectedRange = expectedRange;
+    if (parameterName !== undefined) this.parameterName = parameterName;
+    if (providedValue !== undefined) this.providedValue = providedValue;
+    if (expectedRange !== undefined) this.expectedRange = expectedRange;
   }
 }
 
