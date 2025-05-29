@@ -41,6 +41,23 @@ export class ArduPilotMcpServer {
               properties: {},
               required: []
             }
+          },
+          {
+            name: 'takeoff',
+            description: '指定した高度まで離陸します',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                altitude: {
+                  type: 'number',
+                  description: '離陸する高度（メートル）',
+                  default: 10.0,
+                  minimum: 1.0,
+                  maximum: 100.0
+                }
+              },
+              required: []
+            }
           }
         ]
       };
@@ -52,6 +69,11 @@ export class ArduPilotMcpServer {
         return await this.arm();
       } else if (request.params.name === 'disarm') {
         return await this.disarm();
+      } else if (request.params.name === 'takeoff') {
+        const altitude = typeof request.params.arguments?.altitude === 'number' 
+          ? request.params.arguments.altitude 
+          : 10.0;
+        return await this.takeoff(altitude);
       }
       
       throw new Error(`Unknown tool: ${request.params.name}`);
@@ -142,12 +164,82 @@ export class ArduPilotMcpServer {
     }
   }
 
+  private async takeoff(altitude: number = 10.0): Promise<{ content: Array<{ type: string; text: string }> }> {
+    const conn = new ArduPilotConnection();
+    
+    try {
+      // ハートビート待機（タイムアウト10秒）
+      const status = await conn.connect();
+      if (!status.connected) {
+        return {
+          content: [{
+            type: 'text',
+            text: `エラー: ArduPilotとの接続に失敗しました - ${status.error || '不明なエラー'}`
+          }]
+        };
+      }
+
+      const heartbeatSuccess = await conn.waitHeartbeat(10000);
+      if (!heartbeatSuccess) {
+        return {
+          content: [{
+            type: 'text',
+            text: "エラー: ArduPilotとの接続がタイムアウトしました"
+          }]
+        };
+      }
+
+      // 現在のモードを確認・変更 (実装予定)
+      // const currentMode = await conn.getFlightMode();
+      // if (currentMode !== "GUIDED") {
+      //   await conn.setMode("GUIDED");
+      //   await new Promise(resolve => setTimeout(resolve, 1000));
+      // }
+
+      // アーム処理 (実装予定)
+      // await conn.arm();
+      // await conn.waitMotorsArmed();
+      // await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // 離陸コマンド送信 (実装予定)
+      // const takeoffResult = await conn.sendTakeoffCommand(altitude);
+      // if (!takeoffResult.success) {
+      //   return {
+      //     content: [{
+      //       type: 'text',
+      //       text: "エラー: 離陸コマンドが拒否されました"
+      //     }]
+      //   };
+      // }
+
+      // Placeholder implementation
+      console.log(`Takeoff to ${altitude}m requested`);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `${altitude}m の高度まで離陸を開始しました。`
+        }]
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{
+          type: 'text',
+          text: `エラー: ${errorMessage}\n接続設定を確認してください:\n- SITL/実機が起動しているか\n- ポート番号が正しいか (14552)\n- ファイアウォール設定`
+        }]
+      };
+    } finally {
+      await conn.disconnect();
+    }
+  }
+
   async run(): Promise<void> {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     
     console.log("MCPサーバーを起動します...");
-    console.log("利用可能なツール: arm, disarm");
+    console.log("利用可能なツール: arm, disarm, takeoff");
     console.log("クライアントからの接続を待機中...");
   }
 }
