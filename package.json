@@ -1,0 +1,29 @@
+{
+  "name": "ardupilot-mcp-server",
+  "version": "1.0.0",
+  "description": "ArduPilot MCP Server in TypeScript",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["ardupilot", "mcp", "typescript", "mavlink", "drone"],
+  "author": "hfujikawa77",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.6.0",
+    "node-mavlink": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "tsx": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
