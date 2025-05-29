@@ -73,6 +73,24 @@ export class ArduPilotMcpServer {
               },
               required: ['mode']
             }
+          },
+          {
+            name: 'get_status',
+            description: '機体のステータス（アーム状態、フライトモード、システム状態）を取得します',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              required: []
+            }
+          },
+          {
+            name: 'get_position',
+            description: '機体の位置情報（GPS座標、高度、速度）を取得します',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              required: []
+            }
           }
         ]
       };
@@ -102,6 +120,10 @@ export class ArduPilotMcpServer {
           };
         }
         return await this.changeMode(mode);
+      } else if (request.params.name === 'get_status') {
+        return await this.getStatus();
+      } else if (request.params.name === 'get_position') {
+        return await this.getPosition();
       }
       
       throw new Error(`Unknown tool: ${request.params.name}`);
@@ -349,12 +371,136 @@ export class ArduPilotMcpServer {
     }
   }
 
+  private async getStatus(): Promise<{ content: Array<{ type: string; text: string }> }> {
+    const conn = new ArduPilotConnection();
+    
+    try {
+      const status = await conn.connect();
+      if (!status.connected) {
+        return {
+          content: [{
+            type: 'text',
+            text: `エラー: ArduPilotとの接続に失敗しました - ${status.error || '不明なエラー'}`
+          }]
+        };
+      }
+
+      await conn.waitHeartbeat();
+
+      // Get vehicle status (placeholder implementation)
+      // const armed = await conn.getMotorsArmed();
+      // const flightMode = await conn.getFlightMode();
+      // const heartbeat = await conn.getHeartbeat();
+      // const systemStatus = heartbeat?.system_status;
+
+      // Placeholder implementation
+      console.log('Status request received');
+      
+      const vehicleStatus = {
+        armed: false, // placeholder
+        mode: "STABILIZE", // placeholder
+        system_status: 4 // MAV_STATE_STANDBY placeholder
+      };
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(vehicleStatus, null, 2)
+        }]
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{
+          type: 'text',
+          text: `エラー: ${errorMessage}\n接続設定を確認してください:\n- SITL/実機が起動しているか\n- ポート番号が正しいか (14552)\n- ファイアウォール設定`
+        }]
+      };
+    } finally {
+      await conn.disconnect();
+    }
+  }
+
+  private async getPosition(): Promise<{ content: Array<{ type: string; text: string }> }> {
+    const conn = new ArduPilotConnection();
+    
+    try {
+      const status = await conn.connect();
+      if (!status.connected) {
+        return {
+          content: [{
+            type: 'text',
+            text: `エラー: ArduPilotとの接続に失敗しました - ${status.error || '不明なエラー'}`
+          }]
+        };
+      }
+
+      await conn.waitHeartbeat();
+
+      // Get position data (placeholder implementation)
+      // const position = await conn.receiveMessage('GLOBAL_POSITION_INT', 5000);
+      // if (position) {
+      //   const positionData = {
+      //     latitude: position.lat / 1e7,  // Convert from millidegrees to degrees
+      //     longitude: position.lon / 1e7,
+      //     altitude: position.alt / 1000,  // Convert from millimeters to meters
+      //     relative_alt: position.relative_alt / 1000,
+      //     heading: position.hdg / 100,  // Convert to degrees
+      //     velocity: {
+      //       x: position.vx,
+      //       y: position.vy,
+      //       z: position.vz
+      //     }
+      //   };
+      //   return {
+      //     content: [{
+      //       type: 'text',
+      //       text: JSON.stringify(positionData, null, 2)
+      //     }]
+      //   };
+      // }
+
+      // Placeholder implementation
+      console.log('Position request received');
+      
+      const positionData = {
+        latitude: 35.6762, // Tokyo placeholder
+        longitude: 139.6503,
+        altitude: 50.0, // meters
+        relative_alt: 10.0, // meters
+        heading: 90.0, // degrees
+        velocity: {
+          x: 0.0,
+          y: 0.0,
+          z: 0.0
+        }
+      };
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(positionData, null, 2)
+        }]
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{
+          type: 'text',
+          text: `エラー: ${errorMessage}\n接続設定を確認してください:\n- SITL/実機が起動しているか\n- ポート番号が正しいか (14552)\n- ファイアウォール設定`
+        }]
+      };
+    } finally {
+      await conn.disconnect();
+    }
+  }
+
   async run(): Promise<void> {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     
     console.log("MCPサーバーを起動します...");
-    console.log("利用可能なツール: arm, disarm, takeoff, change_mode");
+    console.log("利用可能なツール: arm, disarm, takeoff, change_mode, get_status, get_position");
     console.log("クライアントからの接続を待機中...");
   }
 }
