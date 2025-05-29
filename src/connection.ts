@@ -1,6 +1,14 @@
 import { MavEsp8266 } from 'node-mavlink';
 import { EventEmitter } from 'events';
 import { MavLinkData, minimal } from 'mavlink-mappings';
+import { 
+  ErrorFactory, 
+  ArduPilotErrorCode, 
+  ErrorHandler, 
+  TimeoutPromise,
+  ConnectionError,
+  TimeoutError 
+} from './errors.js';
 
 export interface ConnectionConfig {
   host: string;
@@ -54,7 +62,7 @@ export class ArduPilotConnection extends EventEmitter {
     try {
       const connectionKey = `${this.config.host}:${this.config.port}`;
       
-      // Try to reuse existing connection from pool
+      // 接続プールから既存の接続を再利用
       let existingConnection = this.connectionPool.get(connectionKey);
       if (existingConnection) {
         this.connection = existingConnection;
@@ -65,8 +73,18 @@ export class ArduPilotConnection extends EventEmitter {
 
       this.setupEventHandlers();
       
-      // Start the MavEsp8266 connection
-      await this.connection.start(this.config.port, this.config.port, this.config.host);
+      // タイムアウト付きで接続を開始
+      const connectPromise = this.connection.start(
+        this.config.port, 
+        this.config.port, 
+        this.config.host
+      );
+      
+      await TimeoutPromise.create(
+        connectPromise,
+        this.config.timeoutMs,
+        `ArduPilotへの接続がタイムアウトしました（${this.config.timeoutMs}ms）`
+      );
       
       this.isConnected = true;
       this.reconnectAttempts = 0;
@@ -74,11 +92,35 @@ export class ArduPilotConnection extends EventEmitter {
       this.emit('connected');
 
     } catch (error: any) {
-      this.emit('error', error);
+      // エラーを適切にハンドリング
+      let handledError = error;
+      
+      if (error instanceof TimeoutError) {
+        handledError = ErrorFactory.createTimeoutError(
+          `ArduPilotへの接続がタイムアウトしました（${this.config.timeoutMs}ms）`,
+          this.config.timeoutMs,
+          ArduPilotErrorCode.CONNECTION_TIMEOUT
+        );
+      } else if (!(error instanceof ConnectionError)) {
+        handledError = ErrorFactory.createConnectionError(
+          `ArduPilotへの接続に失敗しました: ${error.message}`,
+          ArduPilotErrorCode.CONNECTION_FAILED,
+          { 
+            host: this.config.host, 
+            port: this.config.port,
+            originalError: error.message 
+          }
+        );
+      }
+
+      this.emit('error', handledError);
+      
+      // 自動再接続の実行
       if (this.config.autoReconnect && this.reconnectAttempts < this.config.maxReconnectAttempts) {
         this.scheduleReconnect();
       }
-      throw error;
+      
+      throw handledError;
     }
   }
 
@@ -88,15 +130,54 @@ export class ArduPilotConnection extends EventEmitter {
     
     if (this.connection) {
       try {
-        await this.connection.close();
+        await TimeoutPromise.create(
+          this.connection.close(),
+          5000, // 5秒でタイムアウト
+          '接続の切断がタイムアウトしました'
+        );
       } catch (error) {
-        console.error('切断中にエラーが発生しました:', error);
+        ErrorHandler.log(ErrorFactory.createConnectionError(
+          `切断中にエラーが発生しました: ${error instanceof Error ? error.message : String(error)}`,
+          ArduPilotErrorCode.CONNECTION_FAILED
+        ));
       }
     }
     
     this.isConnected = false;
     this.connection = null;
     this.emit('disconnected');
+  }
+
+  /**
+   * リソースのクリーンアップ（finally句で使用）
+   */
+  async cleanup(): Promise<void> {
+    try {
+      await this.disconnect();
+      
+      // 接続プールのクリーンアップ
+      for (const [key, connection] of this.connectionPool.entries()) {
+        try {
+          await connection.close();
+        } catch (error) {
+          ErrorHandler.log(ErrorFactory.createConnectionError(
+            `接続プール ${key} のクリーンアップ中にエラーが発生しました`,
+            ArduPilotErrorCode.CONNECTION_FAILED
+          ));
+        }
+      }
+      this.connectionPool.clear();
+      
+      // すべてのタイマーをクリア
+      this.stopHeartbeat();
+      this.stopReconnectTimer();
+      
+    } catch (error) {
+      ErrorHandler.log(ErrorFactory.createConnectionError(
+        `クリーンアップ中にエラーが発生しました: ${error instanceof Error ? error.message : String(error)}`,
+        ArduPilotErrorCode.CONNECTION_FAILED
+      ));
+    }
   }
 
   private setupEventHandlers(): void {
@@ -152,7 +233,11 @@ export class ArduPilotConnection extends EventEmitter {
 
       this.connection.send(heartbeat, this.config.sourceSystem, this.config.sourceComponent);
     } catch (error) {
-      this.emit('error', new Error(`ハートビート送信エラー: ${error}`));
+      const heartbeatError = ErrorFactory.createConnectionError(
+        `ハートビート送信エラー: ${error instanceof Error ? error.message : String(error)}`,
+        ArduPilotErrorCode.HEARTBEAT_TIMEOUT
+      );
+      this.emit('error', heartbeatError);
     }
   }
 
@@ -161,7 +246,15 @@ export class ArduPilotConnection extends EventEmitter {
     
     this.reconnectAttempts++;
     if (this.reconnectAttempts > this.config.maxReconnectAttempts) {
-      this.emit('error', new Error('最大再接続試行回数に達しました'));
+      const maxReconnectError = ErrorFactory.createConnectionError(
+        `最大再接続試行回数に達しました（${this.config.maxReconnectAttempts}回）`,
+        ArduPilotErrorCode.CONNECTION_FAILED,
+        { 
+          attempts: this.reconnectAttempts,
+          maxAttempts: this.config.maxReconnectAttempts 
+        }
+      );
+      this.emit('error', maxReconnectError);
       return;
     }
 
@@ -170,7 +263,7 @@ export class ArduPilotConnection extends EventEmitter {
       try {
         await this.connect();
       } catch (error) {
-        // Error handling is done in connect method
+        // エラーハンドリングはconnectメソッドで実行済み
       }
     }, this.config.reconnectInterval);
   }
@@ -184,13 +277,42 @@ export class ArduPilotConnection extends EventEmitter {
 
   async sendMessage(message: MavLinkData): Promise<void> {
     if (!this.connection || !this.isConnected) {
-      throw new Error('ArduPilotに接続されていません');
+      throw ErrorFactory.createConnectionError(
+        'ArduPilotに接続されていません',
+        ArduPilotErrorCode.CONNECTION_LOST,
+        { 
+          isConnected: this.isConnected,
+          connectionExists: !!this.connection 
+        }
+      );
     }
 
     try {
-      await this.connection.send(message, this.config.sourceSystem, this.config.sourceComponent);
+      // タイムアウト付きでメッセージを送信
+      const sendPromise = this.connection.send(
+        message, 
+        this.config.sourceSystem, 
+        this.config.sourceComponent
+      );
+      
+      await TimeoutPromise.create(
+        sendPromise,
+        this.config.timeoutMs,
+        'メッセージ送信がタイムアウトしました'
+      );
     } catch (error) {
-      throw new Error(`メッセージ送信エラー: ${error}`);
+      if (error instanceof TimeoutError) {
+        throw ErrorFactory.createTimeoutError(
+          'メッセージ送信がタイムアウトしました',
+          this.config.timeoutMs,
+          ArduPilotErrorCode.COMMAND_TIMEOUT
+        );
+      } else {
+        throw ErrorFactory.createConnectionError(
+          `メッセージ送信エラー: ${error instanceof Error ? error.message : String(error)}`,
+          ArduPilotErrorCode.COMMAND_FAILED
+        );
+      }
     }
   }
 
@@ -199,27 +321,34 @@ export class ArduPilotConnection extends EventEmitter {
     host: string;
     port: number;
     reconnectAttempts: number;
+    maxReconnectAttempts: number;
+    autoReconnect: boolean;
   } {
     return {
       isConnected: this.isConnected,
       host: this.config.host,
       port: this.config.port,
-      reconnectAttempts: this.reconnectAttempts
+      reconnectAttempts: this.reconnectAttempts,
+      maxReconnectAttempts: this.config.maxReconnectAttempts,
+      autoReconnect: this.config.autoReconnect
     };
   }
 
-  // Clean up all connections in the pool
-  async cleanup(): Promise<void> {
+  /**
+   * 手動で再接続を実行
+   */
+  async reconnect(): Promise<void> {
     await this.disconnect();
-    
-    for (const [key, connection] of this.connectionPool) {
-      try {
-        await connection.close();
-      } catch (error) {
-        console.error(`プール接続 ${key} の切断エラー:`, error);
-      }
-    }
-    
-    this.connectionPool.clear();
+    this.reconnectAttempts = 0; // リセット
+    await this.connect();
+  }
+
+  /**
+   * ヘルスチェック
+   */
+  isHealthy(): boolean {
+    return this.isConnected && 
+           !!this.connection && 
+           this.reconnectAttempts < this.config.maxReconnectAttempts;
   }
 }
