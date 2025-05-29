@@ -12,7 +12,8 @@ import {
   McpError
 } from '@modelcontextprotocol/sdk/types.js';
 import { ArduPilotConnection } from './connection.js';
-import { ArduPilotMCPTools } from './mcp-tools.js';
+import { EnhancedArduPilotMCPTools } from './mcp-tools-enhanced.js';
+import { ErrorHandler, ArduPilotErrorCode } from './errors.js';
 import {
   ArmToolParams,
   DisarmToolParams,
@@ -27,7 +28,7 @@ import {
 export class ArduPilotMcpServer {
   private server: Server;
   private connection: ArduPilotConnection;
-  private tools: ArduPilotMCPTools;
+  private tools: EnhancedArduPilotMCPTools;
 
   constructor() {
     this.server = new Server(
@@ -43,7 +44,7 @@ export class ArduPilotMcpServer {
     );
 
     this.connection = new ArduPilotConnection(DEFAULT_CONNECTION_CONFIG);
-    this.tools = new ArduPilotMCPTools(this.connection);
+    this.tools = new EnhancedArduPilotMCPTools(this.connection);
 
     this.setupHandlers();
   }
@@ -256,6 +257,9 @@ export class ArduPilotMcpServer {
     try {
       console.log('サーバーを停止しています...');
       
+      // ツールのクリーンアップ
+      await this.tools.cleanup();
+      
       // 接続をクリーンアップ
       await this.connection.cleanup();
       
@@ -264,7 +268,8 @@ export class ArduPilotMcpServer {
       
       console.log('サーバーが正常に停止されました');
     } catch (error: any) {
-      console.error('サーバー停止エラー:', error);
+      const handledError = ErrorHandler.handleError(error);
+      console.error('サーバー停止エラー:', handledError);
       throw error;
     }
   }

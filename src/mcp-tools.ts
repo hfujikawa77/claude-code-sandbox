@@ -31,6 +31,14 @@ import {
   GPS_FIX_TYPE,
   MAV_STATE
 } from './mavlink-types.js';
+import { 
+  ErrorFactory, 
+  ErrorHandler, 
+  ArduPilotErrorCode, 
+  TimeoutPromise,
+  CommandError,
+  ParameterError 
+} from './errors.js';
 
 export class ArduPilotMCPTools {
   private connection: ArduPilotConnection;
