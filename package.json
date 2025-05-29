@@ -5,11 +5,16 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "npm run clean && tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node test-mcp.mjs",
+    "test:build": "npm run build && echo '✅ Build completed successfully'",
+    "test:tools": "npm run build && node -e \"import('./dist/mcp-server.js').then(m => console.log('✅ All modules loaded successfully'))\"",
+    "lint": "echo 'No linter configured - TypeScript compilation serves as validation'",
+    "watch": "tsc --watch"
   },
   "keywords": ["ardupilot", "mcp", "typescript", "mavlink", "drone"],
   "author": "hfujikawa77",
