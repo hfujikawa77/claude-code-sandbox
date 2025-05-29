@@ -1,10 +1,18 @@
-import { ArduPilotConnection } from './connection.js';
+import { ArduPilotMcpServer } from './mcp-server.js';
 
 // ArduPilot MCP Server in TypeScript
 console.log("ArduPilot MCP Server - TypeScript version");
 
-// Initialize ArduPilot connection
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const connection = new ArduPilotConnection();
+async function main(): Promise<void> {
+  try {
+    const server = new ArduPilotMcpServer();
+    await server.run();
+  } catch (error) {
+    console.error("MCPサーバーエラー:", error);
+    process.exit(1);
+  }
+}
 
-console.log("MCPサーバー初期化完了");
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(console.error);
+}
