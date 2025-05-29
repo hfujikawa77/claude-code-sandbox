@@ -1,0 +1,1 @@
+console.log('TypeScript development environment setup complete!');
