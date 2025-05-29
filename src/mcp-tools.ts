@@ -55,21 +55,21 @@ export class ArduPilotMCPTools {
 
       // アームコマンドを送信
       const armCommand = new common.CommandLong();
-      armCommand.command = MAV_CMD.COMPONENT_ARM_DISARM;
-      armCommand.param1 = 1; // 1 = ARM
-      armCommand.param2 = 0;
-      armCommand.param3 = 0;
-      armCommand.param4 = 0;
-      armCommand.param5 = 0;
-      armCommand.param6 = 0;
-      armCommand.param7 = 0;
+      armCommand.command = common.MavCmd.COMPONENT_ARM_DISARM;
+      armCommand._param1 = 1; // 1 = ARM
+      armCommand._param2 = 0;
+      armCommand._param3 = 0;
+      armCommand._param4 = 0;
+      armCommand._param5 = 0;
+      armCommand._param6 = 0;
+      armCommand._param7 = 0;
       armCommand.targetSystem = 1;
       armCommand.targetComponent = 1;
 
       await this.connection.sendMessage(armCommand);
 
       // コマンド確認を待機
-      const result = await this.waitForCommandAck(MAV_CMD.COMPONENT_ARM_DISARM, 5000);
+      const result = await this.waitForCommandAck(common.MavCmd.COMPONENT_ARM_DISARM, 5000);
 
       if (result === MAV_RESULT.ACCEPTED) {
         return {
@@ -109,21 +109,21 @@ export class ArduPilotMCPTools {
 
       // ディスアームコマンドを送信
       const disarmCommand = new common.CommandLong();
-      disarmCommand.command = MAV_CMD.COMPONENT_ARM_DISARM;
-      disarmCommand.param1 = 0; // 0 = DISARM
-      disarmCommand.param2 = 0;
-      disarmCommand.param3 = 0;
-      disarmCommand.param4 = 0;
-      disarmCommand.param5 = 0;
-      disarmCommand.param6 = 0;
-      disarmCommand.param7 = 0;
+      disarmCommand.command = common.MavCmd.COMPONENT_ARM_DISARM;
+      disarmCommand._param1 = 0; // 0 = DISARM
+      disarmCommand._param2 = 0;
+      disarmCommand._param3 = 0;
+      disarmCommand._param4 = 0;
+      disarmCommand._param5 = 0;
+      disarmCommand._param6 = 0;
+      disarmCommand._param7 = 0;
       disarmCommand.targetSystem = 1;
       disarmCommand.targetComponent = 1;
 
       await this.connection.sendMessage(disarmCommand);
 
       // コマンド確認を待機
-      const result = await this.waitForCommandAck(MAV_CMD.COMPONENT_ARM_DISARM, 5000);
+      const result = await this.waitForCommandAck(common.MavCmd.COMPONENT_ARM_DISARM, 5000);
 
       if (result === MAV_RESULT.ACCEPTED) {
         return {
@@ -181,21 +181,21 @@ export class ArduPilotMCPTools {
 
       // 離陸コマンドを送信
       const takeoffCommand = new common.CommandLong();
-      takeoffCommand.command = MAV_CMD.NAV_TAKEOFF;
-      takeoffCommand.param1 = 0; // Minimum pitch
-      takeoffCommand.param2 = 0; // Empty
-      takeoffCommand.param3 = 0; // Empty
-      takeoffCommand.param4 = 0; // Yaw angle
-      takeoffCommand.param5 = 0; // Latitude
-      takeoffCommand.param6 = 0; // Longitude
-      takeoffCommand.param7 = altitude; // Altitude
+      takeoffCommand.command = common.MavCmd.NAV_TAKEOFF;
+      takeoffCommand._param1 = 0; // Minimum pitch
+      takeoffCommand._param2 = 0; // Empty
+      takeoffCommand._param3 = 0; // Empty
+      takeoffCommand._param4 = 0; // Yaw angle
+      takeoffCommand._param5 = 0; // Latitude
+      takeoffCommand._param6 = 0; // Longitude
+      takeoffCommand._param7 = altitude; // Altitude
       takeoffCommand.targetSystem = 1;
       takeoffCommand.targetComponent = 1;
 
       await this.connection.sendMessage(takeoffCommand);
 
       // コマンド確認を待機
-      const result = await this.waitForCommandAck(MAV_CMD.NAV_TAKEOFF, 10000);
+      const result = await this.waitForCommandAck(common.MavCmd.NAV_TAKEOFF, 10000);
 
       if (result === MAV_RESULT.ACCEPTED) {
         return {
@@ -217,7 +217,7 @@ export class ArduPilotMCPTools {
       return {
         success: false,
         message: `離陸処理中にエラーが発生しました: ${error.message}`,
-        altitude: params.altitude
+        altitude: params.altitude || 10
       };
     }
   }
@@ -247,21 +247,21 @@ export class ArduPilotMCPTools {
 
       // フライトモード変更コマンドを送信
       const modeCommand = new common.CommandLong();
-      modeCommand.command = MAV_CMD.DO_SET_MODE;
-      modeCommand.param1 = minimal.MavModeFlag.CUSTOM_MODE_ENABLED; // base_mode
-      modeCommand.param2 = modeNumber; // custom_mode
-      modeCommand.param3 = 0;
-      modeCommand.param4 = 0;
-      modeCommand.param5 = 0;
-      modeCommand.param6 = 0;
-      modeCommand.param7 = 0;
+      modeCommand.command = common.MavCmd.DO_SET_MODE;
+      modeCommand._param1 = minimal.MavModeFlag.CUSTOM_MODE_ENABLED; // base_mode
+      modeCommand._param2 = modeNumber; // custom_mode
+      modeCommand._param3 = 0;
+      modeCommand._param4 = 0;
+      modeCommand._param5 = 0;
+      modeCommand._param6 = 0;
+      modeCommand._param7 = 0;
       modeCommand.targetSystem = 1;
       modeCommand.targetComponent = 1;
 
       await this.connection.sendMessage(modeCommand);
 
       // コマンド確認を待機
-      const result = await this.waitForCommandAck(MAV_CMD.DO_SET_MODE, 5000);
+      const result = await this.waitForCommandAck(common.MavCmd.DO_SET_MODE, 5000);
 
       if (result === MAV_RESULT.ACCEPTED) {
         return {
@@ -324,10 +324,10 @@ export class ArduPilotMCPTools {
         mode: this.getFlightModeName(heartbeatData.customMode) || 'UNKNOWN',
         mode_num: heartbeatData.customMode,
         system_status: heartbeatData.systemStatus,
-        battery_voltage: batteryInfo?.voltage_battery ? batteryInfo.voltage_battery / 1000 : undefined,
+        battery_voltage: batteryInfo?.voltage_battery ? batteryInfo.voltage_battery / 1000 : 0,
         battery_remaining: batteryInfo?.battery_remaining,
-        gps_fix_type: undefined, // GPS情報は別途取得が必要
-        satellites_visible: undefined
+        gps_fix_type: GPS_FIX_TYPE.NO_FIX, // GPS情報は別途取得が必要
+        satellites_visible: 0
       };
 
       return {
