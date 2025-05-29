@@ -1,230 +1,225 @@
-import type { ArduPilotConnectionConfig, ConnectionStatus } from './types.js';
-import type { 
-  MAVLinkHeartbeat, 
-  MAVLinkGlobalPositionInt, 
-  MAVLinkCommandAck,
-  MAVLinkCommandLong,
-  ProcessedPosition,
-  ProcessedStatus,
-  CommandResult
-} from './mavlink-types.js';
-import { MAVLinkConverter, MAV_CMD, MAV_RESULT } from './mavlink-types.js';
+import { MavEsp8266 } from 'node-mavlink';
+import { EventEmitter } from 'events';
+import { MavLinkData, minimal } from 'mavlink-mappings';
 
-export class ArduPilotConnection {
-  private config: ArduPilotConnectionConfig;
-  private connection: any = null;
+export interface ConnectionConfig {
+  host: string;
+  port: number;
+  sourceSystem: number;
+  sourceComponent: number;
+  timeoutMs: number;
+  autoReconnect: boolean;
+  maxReconnectAttempts: number;
+  reconnectInterval: number;
+}
 
-  constructor(config: Partial<ArduPilotConnectionConfig> = {}) {
+export interface HeartbeatData {
+  autopilot: number;
+  type: number;
+  systemStatus: number;
+  baseMode: number;
+  customMode: number;
+  mavlinkVersion: number;
+}
+
+export class ArduPilotConnection extends EventEmitter {
+  private connection: MavEsp8266 | null = null;
+  private config: ConnectionConfig;
+  private isConnected = false;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempts = 0;
+  private connectionPool: Map<string, MavEsp8266> = new Map();
+
+  constructor(config: Partial<ConnectionConfig> = {}) {
+    super();
     this.config = {
       host: '127.0.0.1',
       port: 14552,
-      protocol: 'udp',
       sourceSystem: 1,
       sourceComponent: 90,
-      timeout: 10000,
+      timeoutMs: 10000,
       autoReconnect: true,
+      maxReconnectAttempts: 5,
+      reconnectInterval: 5000,
       ...config
     };
   }
 
-  async connect(): Promise<ConnectionStatus> {
+  async connect(): Promise<void> {
+    if (this.isConnected) {
+      return;
+    }
+
     try {
-      console.log(`ArduPilotに接続中... (${this.config.protocol}:${this.config.host}:${this.config.port})`);
+      const connectionKey = `${this.config.host}:${this.config.port}`;
       
-      // Note: node-mavlink connection implementation will be added here
-      // For now, returning a placeholder implementation
+      // Try to reuse existing connection from pool
+      let existingConnection = this.connectionPool.get(connectionKey);
+      if (existingConnection) {
+        this.connection = existingConnection;
+      } else {
+        this.connection = new MavEsp8266();
+        this.connectionPool.set(connectionKey, this.connection);
+      }
+
+      this.setupEventHandlers();
       
-      return {
-        connected: true,
-        targetSystem: 1,
-        targetComponent: 1
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`接続エラー: ${errorMessage}`);
-      console.error('接続設定を確認してください:');
-      console.error('- SITL/実機が起動しているか');
-      console.error(`- ポート番号が正しいか (${this.config.port})`);
-      console.error('- ファイアウォール設定');
+      // Start the MavEsp8266 connection
+      await this.connection.start(this.config.port, this.config.port, this.config.host);
       
-      return {
-        connected: false,
-        error: errorMessage
-      };
+      this.isConnected = true;
+      this.reconnectAttempts = 0;
+      this.startHeartbeat();
+      this.emit('connected');
+
+    } catch (error: any) {
+      this.emit('error', error);
+      if (this.config.autoReconnect && this.reconnectAttempts < this.config.maxReconnectAttempts) {
+        this.scheduleReconnect();
+      }
+      throw error;
     }
   }
 
   async disconnect(): Promise<void> {
+    this.stopHeartbeat();
+    this.stopReconnectTimer();
+    
     if (this.connection) {
-      // Close connection implementation
-      this.connection = null;
-      console.log('ArduPilot接続を切断しました');
+      try {
+        await this.connection.close();
+      } catch (error) {
+        console.error('切断中にエラーが発生しました:', error);
+      }
+    }
+    
+    this.isConnected = false;
+    this.connection = null;
+    this.emit('disconnected');
+  }
+
+  private setupEventHandlers(): void {
+    if (!this.connection) return;
+
+    this.connection.on('data', (packet: any) => {
+      if (packet.header?.msgid === 0) { // HEARTBEAT message ID
+        const heartbeatData: HeartbeatData = {
+          autopilot: packet.data?.autopilot || 0,
+          type: packet.data?.type || 0,
+          systemStatus: packet.data?.system_status || 0,
+          baseMode: packet.data?.base_mode || 0,
+          customMode: packet.data?.custom_mode || 0,
+          mavlinkVersion: packet.data?.mavlink_version || 3
+        };
+        this.emit('heartbeat', heartbeatData);
+      }
+      this.emit('message', packet);
+    });
+
+    this.connection.on('error', (error: any) => {
+      this.emit('error', error);
+      if (this.config.autoReconnect) {
+        this.scheduleReconnect();
+      }
+    });
+  }
+
+  private startHeartbeat(): void {
+    this.heartbeatTimer = setInterval(() => {
+      this.sendHeartbeat();
+    }, 1000); // Send heartbeat every second
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
   }
 
-  async waitHeartbeat(timeout?: number): Promise<boolean> {
-    const waitTime = timeout || this.config.timeout;
-    
+  private sendHeartbeat(): void {
+    if (!this.connection || !this.isConnected) return;
+
     try {
-      // Heartbeat waiting implementation will be added here
-      console.log(`ハートビート待機中... (タイムアウト: ${waitTime}ms)`);
-      
-      // Placeholder implementation
-      return true;
+      const heartbeat = new minimal.Heartbeat();
+      heartbeat.type = minimal.MavType.GCS; // Ground Control Station
+      heartbeat.autopilot = minimal.MavAutopilot.INVALID;
+      heartbeat.baseMode = minimal.MavModeFlag.CUSTOM_MODE_ENABLED;
+      heartbeat.customMode = 0;
+      heartbeat.systemStatus = minimal.MavState.ACTIVE;
+      heartbeat.mavlinkVersion = 3;
+
+      this.connection.send(heartbeat, this.config.sourceSystem, this.config.sourceComponent);
     } catch (error) {
-      console.error(`ハートビート待機でエラー: ${error}`);
-      return false;
+      this.emit('error', new Error(`ハートビート送信エラー: ${error}`));
     }
   }
 
-  isConnected(): boolean {
-    return this.connection !== null;
-  }
-
-  getTargetSystem(): number | undefined {
-    return this.connection?.target_system;
-  }
-
-  getTargetComponent(): number | undefined {
-    return this.connection?.target_component;
-  }
-
-  // MAVLink message handling methods (placeholder implementations)
-  async receiveHeartbeat(timeout: number = 5000): Promise<MAVLinkHeartbeat | null> {
-    // Placeholder for receiving HEARTBEAT message
-    console.log(`Waiting for HEARTBEAT message (timeout: ${timeout}ms)`);
-    return null;
-  }
-
-  async receiveGlobalPositionInt(timeout: number = 5000): Promise<MAVLinkGlobalPositionInt | null> {
-    // Placeholder for receiving GLOBAL_POSITION_INT message
-    console.log(`Waiting for GLOBAL_POSITION_INT message (timeout: ${timeout}ms)`);
-    return null;
-  }
-
-  async sendCommandLong(command: MAVLinkCommandLong): Promise<CommandResult> {
-    // Placeholder for sending COMMAND_LONG message
-    console.log(`Sending COMMAND_LONG: ${command.command}`);
-    return {
-      success: true,
-      result: MAV_RESULT.MAV_RESULT_ACCEPTED,
-      message: 'Command sent successfully'
-    };
-  }
-
-  async waitForCommandAck(command: MAV_CMD, timeout: number = 10000): Promise<MAVLinkCommandAck | null> {
-    // Placeholder for waiting for COMMAND_ACK message
-    console.log(`Waiting for COMMAND_ACK for command ${command} (timeout: ${timeout}ms)`);
-    return null;
-  }
-
-  // High-level command methods
-  async armMotors(): Promise<CommandResult> {
-    const command: MAVLinkCommandLong = {
-      target_system: this.getTargetSystem() || 1,
-      target_component: this.getTargetComponent() || 1,
-      command: MAV_CMD.MAV_CMD_COMPONENT_ARM_DISARM,
-      confirmation: 0,
-      param1: 1, // 1 to arm, 0 to disarm
-      param2: 0,
-      param3: 0,
-      param4: 0,
-      param5: 0,
-      param6: 0,
-      param7: 0
-    };
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
     
-    return await this.sendCommandLong(command);
-  }
-
-  async disarmMotors(): Promise<CommandResult> {
-    const command: MAVLinkCommandLong = {
-      target_system: this.getTargetSystem() || 1,
-      target_component: this.getTargetComponent() || 1,
-      command: MAV_CMD.MAV_CMD_COMPONENT_ARM_DISARM,
-      confirmation: 0,
-      param1: 0, // 1 to arm, 0 to disarm
-      param2: 0,
-      param3: 0,
-      param4: 0,
-      param5: 0,
-      param6: 0,
-      param7: 0
-    };
-    
-    return await this.sendCommandLong(command);
-  }
-
-  async takeoff(altitude: number): Promise<CommandResult> {
-    const command: MAVLinkCommandLong = {
-      target_system: this.getTargetSystem() || 1,
-      target_component: this.getTargetComponent() || 1,
-      command: MAV_CMD.MAV_CMD_NAV_TAKEOFF,
-      confirmation: 0,
-      param1: 0, // Minimum pitch
-      param2: 0, // Empty
-      param3: 0, // Empty
-      param4: 0, // Yaw angle
-      param5: 0, // Latitude
-      param6: 0, // Longitude
-      param7: altitude // Altitude
-    };
-    
-    return await this.sendCommandLong(command);
-  }
-
-  async setFlightMode(modeId: number): Promise<CommandResult> {
-    const command: MAVLinkCommandLong = {
-      target_system: this.getTargetSystem() || 1,
-      target_component: this.getTargetComponent() || 1,
-      command: MAV_CMD.MAV_CMD_DO_SET_MODE,
-      confirmation: 0,
-      param1: 1, // MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
-      param2: modeId, // Custom mode
-      param3: 0,
-      param4: 0,
-      param5: 0,
-      param6: 0,
-      param7: 0
-    };
-    
-    return await this.sendCommandLong(command);
-  }
-
-  // Data processing methods
-  async getProcessedStatus(): Promise<ProcessedStatus | null> {
-    const heartbeat = await this.receiveHeartbeat();
-    if (!heartbeat) {
-      return null;
+    this.reconnectAttempts++;
+    if (this.reconnectAttempts > this.config.maxReconnectAttempts) {
+      this.emit('error', new Error('最大再接続試行回数に達しました'));
+      return;
     }
 
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      try {
+        await this.connect();
+      } catch (error) {
+        // Error handling is done in connect method
+      }
+    }, this.config.reconnectInterval);
+  }
+
+  private stopReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  async sendMessage(message: MavLinkData): Promise<void> {
+    if (!this.connection || !this.isConnected) {
+      throw new Error('ArduPilotに接続されていません');
+    }
+
+    try {
+      await this.connection.send(message, this.config.sourceSystem, this.config.sourceComponent);
+    } catch (error) {
+      throw new Error(`メッセージ送信エラー: ${error}`);
+    }
+  }
+
+  getConnectionStatus(): {
+    isConnected: boolean;
+    host: string;
+    port: number;
+    reconnectAttempts: number;
+  } {
     return {
-      armed: (heartbeat.base_mode & 128) !== 0, // MAV_MODE_FLAG_SAFETY_ARMED
-      mode: MAVLinkConverter.getFlightModeName(heartbeat.custom_mode),
-      modeId: heartbeat.custom_mode,
-      systemStatus: heartbeat.system_status,
-      timestamp: Date.now()
+      isConnected: this.isConnected,
+      host: this.config.host,
+      port: this.config.port,
+      reconnectAttempts: this.reconnectAttempts
     };
   }
 
-  async getProcessedPosition(): Promise<ProcessedPosition | null> {
-    const position = await this.receiveGlobalPositionInt();
-    if (!position) {
-      return null;
+  // Clean up all connections in the pool
+  async cleanup(): Promise<void> {
+    await this.disconnect();
+    
+    for (const [key, connection] of this.connectionPool) {
+      try {
+        await connection.close();
+      } catch (error) {
+        console.error(`プール接続 ${key} の切断エラー:`, error);
+      }
     }
-
-    return {
-      latitude: MAVLinkConverter.milliDegreesToDegrees(position.lat),
-      longitude: MAVLinkConverter.milliDegreesToDegrees(position.lon),
-      altitude: MAVLinkConverter.millimetersToMeters(position.alt),
-      relativeAlt: MAVLinkConverter.millimetersToMeters(position.relative_alt),
-      heading: MAVLinkConverter.centiDegreesToDegrees(position.hdg),
-      velocity: {
-        x: MAVLinkConverter.centimetersPerSecondToMetersPerSecond(position.vx),
-        y: MAVLinkConverter.centimetersPerSecondToMetersPerSecond(position.vy),
-        z: MAVLinkConverter.centimetersPerSecondToMetersPerSecond(position.vz)
-      },
-      timestamp: position.time_boot_ms
-    };
+    
+    this.connectionPool.clear();
   }
 }

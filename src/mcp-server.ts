@@ -1,32 +1,61 @@
+/**
+ * ArduPilot MCP Server Implementation
+ * Model Context Protocol (MCP) server for ArduPilot drone control
+ */
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ErrorCode,
+  ListToolsRequestSchema,
+  McpError
+} from '@modelcontextprotocol/sdk/types.js';
 import { ArduPilotConnection } from './connection.js';
+import { ArduPilotMCPTools } from './mcp-tools.js';
+import {
+  ArmToolParams,
+  DisarmToolParams,
+  TakeoffToolParams,
+  ChangeModeToolParams,
+  GetStatusToolParams,
+  GetPositionToolParams,
+  MCPToolResult,
+  DEFAULT_CONNECTION_CONFIG
+} from './types.js';
 
 export class ArduPilotMcpServer {
   private server: Server;
+  private connection: ArduPilotConnection;
+  private tools: ArduPilotMCPTools;
 
   constructor() {
-    this.server = new Server({
-      name: "ArduPilot Controller",
-      version: "1.0.0"
-    }, {
-      capabilities: {
-        tools: {}
+    this.server = new Server(
+      {
+        name: 'ardupilot-mcp-server',
+        version: '1.0.0'
+      },
+      {
+        capabilities: {
+          tools: {}
+        }
       }
-    });
+    );
 
-    this.setupTools();
+    this.connection = new ArduPilotConnection(DEFAULT_CONNECTION_CONFIG);
+    this.tools = new ArduPilotMCPTools(this.connection);
+
+    this.setupHandlers();
   }
 
-  private setupTools(): void {
-    // List available tools
+  private setupHandlers(): void {
+    // ツール一覧の処理
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
         tools: [
           {
             name: 'arm',
-            description: '機体をアームします',
+            description: 'モーターをアームします（武装状態にします）',
             inputSchema: {
               type: 'object',
               properties: {},
@@ -34,8 +63,8 @@ export class ArduPilotMcpServer {
             }
           },
           {
-            name: 'disarm', 
-            description: '機体をディスアームします',
+            name: 'disarm',
+            description: 'モーターをディスアームします（非武装状態にします）',
             inputSchema: {
               type: 'object',
               properties: {},
@@ -44,16 +73,15 @@ export class ArduPilotMcpServer {
           },
           {
             name: 'takeoff',
-            description: '指定した高度まで離陸します',
+            description: '指定された高度で離陸します',
             inputSchema: {
               type: 'object',
               properties: {
                 altitude: {
                   type: 'number',
-                  description: '離陸する高度（メートル）',
-                  default: 10.0,
-                  minimum: 1.0,
-                  maximum: 100.0
+                  description: '離陸高度（メートル、1-100の範囲、デフォルト：10）',
+                  minimum: 1,
+                  maximum: 100
                 }
               },
               required: []
@@ -67,8 +95,14 @@ export class ArduPilotMcpServer {
               properties: {
                 mode: {
                   type: 'string',
-                  description: 'フライトモード名 (GUIDED, LAND, RTL, STABILIZE, LOITER等)',
-                  enum: ['GUIDED', 'LAND', 'RTL', 'STABILIZE', 'LOITER', 'AUTO', 'POSHOLD', 'CIRCLE', 'BRAKE']
+                  description: 'フライトモード名',
+                  enum: [
+                    'STABILIZE', 'ACRO', 'ALT_HOLD', 'AUTO', 'GUIDED', 'LOITER',
+                    'RTL', 'CIRCLE', 'LAND', 'DRIFT', 'SPORT', 'FLIP', 'AUTOTUNE',
+                    'POSHOLD', 'BRAKE', 'THROW', 'AVOID_ADSB', 'GUIDED_NOGPS',
+                    'SMART_RTL', 'FLOWHOLD', 'FOLLOW', 'ZIGZAG', 'SYSTEMID',
+                    'AUTOROTATE', 'AUTO_RTL'
+                  ]
                 }
               },
               required: ['mode']
@@ -76,7 +110,7 @@ export class ArduPilotMcpServer {
           },
           {
             name: 'get_status',
-            description: '機体のステータス（アーム状態、フライトモード、システム状態）を取得します',
+            description: '機体のステータス情報を取得します（アーム状態、フライトモード、システムステータス）',
             inputSchema: {
               type: 'object',
               properties: {},
@@ -85,7 +119,7 @@ export class ArduPilotMcpServer {
           },
           {
             name: 'get_position',
-            description: '機体の位置情報（GPS座標、高度、速度）を取得します',
+            description: '機体の位置情報を取得します（GPS位置、高度、ヘディング、速度）',
             inputSchema: {
               type: 'object',
               properties: {},
@@ -96,411 +130,152 @@ export class ArduPilotMcpServer {
       };
     });
 
-    // Handle tool calls
+    // ツール実行の処理
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name === 'arm') {
-        return await this.arm();
-      } else if (request.params.name === 'disarm') {
-        return await this.disarm();
-      } else if (request.params.name === 'takeoff') {
-        const altitude = typeof request.params.arguments?.altitude === 'number' 
-          ? request.params.arguments.altitude 
-          : 10.0;
-        return await this.takeoff(altitude);
-      } else if (request.params.name === 'change_mode') {
-        const mode = typeof request.params.arguments?.mode === 'string' 
-          ? request.params.arguments.mode 
-          : '';
-        if (!mode) {
+      const { name, arguments: args } = request.params;
+
+      try {
+        let result: MCPToolResult;
+
+        switch (name) {
+          case 'arm':
+            result = await this.tools.arm(args as ArmToolParams);
+            break;
+
+          case 'disarm':
+            result = await this.tools.disarm(args as DisarmToolParams);
+            break;
+
+          case 'takeoff':
+            result = await this.tools.takeoff(args as TakeoffToolParams);
+            break;
+
+          case 'change_mode':
+            if (!args || typeof args !== 'object' || !('mode' in args)) {
+              throw new McpError(ErrorCode.InvalidParams, 'mode パラメータが必要です');
+            }
+            result = await this.tools.changeMode(args as unknown as ChangeModeToolParams);
+            break;
+
+          case 'get_status':
+            result = await this.tools.getStatus(args as GetStatusToolParams);
+            break;
+
+          case 'get_position':
+            result = await this.tools.getPosition(args as GetPositionToolParams);
+            break;
+
+          default:
+            throw new McpError(
+              ErrorCode.MethodNotFound,
+              `不明なツール: ${name}`
+            );
+        }
+
+        // 結果をMCP形式で返す
+        if (result.success) {
+          // 成功時のレスポンス
           return {
-            content: [{
-              type: 'text',
-              text: 'エラー: モード名が指定されていません'
-            }]
+            content: [
+              {
+                type: 'text',
+                text: result.message
+              },
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } else {
+          // エラー時のレスポンス
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `エラー: ${result.message}`
+              }
+            ],
+            isError: true
           };
         }
-        return await this.changeMode(mode);
-      } else if (request.params.name === 'get_status') {
-        return await this.getStatus();
-      } else if (request.params.name === 'get_position') {
-        return await this.getPosition();
+
+      } catch (error: any) {
+        throw new McpError(
+          ErrorCode.InternalError,
+          `ツール実行エラー: ${error.message}`
+        );
       }
-      
-      throw new Error(`Unknown tool: ${request.params.name}`);
+    });
+
+    // エラーハンドリング
+    this.server.onerror = (error) => {
+      console.error('[MCP Server Error]', error);
+    };
+
+    // 接続イベントハンドリング
+    this.connection.on('connected', () => {
+      console.log('ArduPilotに接続しました');
+    });
+
+    this.connection.on('disconnected', () => {
+      console.log('ArduPilotから切断されました');
+    });
+
+    this.connection.on('error', (error) => {
+      console.error('接続エラー:', error);
+    });
+
+    this.connection.on('heartbeat', (data) => {
+      console.log('ハートビート受信:', {
+        armed: (data.baseMode & 128) !== 0,
+        mode: data.customMode,
+        status: data.systemStatus
+      });
     });
   }
 
-  private async arm(): Promise<{ content: Array<{ type: string; text: string }> }> {
-    const conn = new ArduPilotConnection();
-    
+  async start(): Promise<void> {
     try {
-      const status = await conn.connect();
-      if (!status.connected) {
-        return {
-          content: [{
-            type: 'text',
-            text: `エラー: ArduPilotとの接続に失敗しました - ${status.error || '不明なエラー'}`
-          }]
-        };
-      }
+      // ArduPilotに接続
+      await this.connection.connect();
+      console.log('ArduPilot接続が確立されました');
 
-      const heartbeatSuccess = await conn.waitHeartbeat(10000);
-      if (!heartbeatSuccess) {
-        return {
-          content: [{
-            type: 'text',
-            text: "エラー: ArduPilotとの接続がタイムアウトしました"
-          }]
-        };
-      }
+      // MCPサーバーを開始
+      const transport = new StdioServerTransport();
+      await this.server.connect(transport);
+      console.log('ArduPilot MCP Serverが起動しました');
 
-      // ArduCopter arm command implementation will be added here
-      // For now, return success message
-      
-      return {
-        content: [{
-          type: 'text',
-          text: "機体をアームしました。"
-        }]
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        content: [{
-          type: 'text',
-          text: `エラー: ${errorMessage}\n接続設定を確認してください:\n- SITL/実機が起動しているか\n- ポート番号が正しいか (14552)\n- ファイアウォール設定`
-        }]
-      };
-    } finally {
-      await conn.disconnect();
+    } catch (error: any) {
+      console.error('サーバー起動エラー:', error);
+      throw error;
     }
   }
 
-  private async disarm(): Promise<{ content: Array<{ type: string; text: string }> }> {
-    const conn = new ArduPilotConnection();
-    
+  async stop(): Promise<void> {
     try {
-      const status = await conn.connect();
-      if (!status.connected) {
-        return {
-          content: [{
-            type: 'text',
-            text: `エラー: ArduPilotとの接続に失敗しました - ${status.error || '不明なエラー'}`
-          }]
-        };
-      }
-
-      await conn.waitHeartbeat();
-
-      // ArduCopter disarm command implementation will be added here
-      // For now, return success message
+      console.log('サーバーを停止しています...');
       
-      return {
-        content: [{
-          type: 'text',
-          text: "機体をディスアームしました。"
-        }]
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        content: [{
-          type: 'text',
-          text: `エラー: ${errorMessage}\n接続設定を確認してください:\n- SITL/実機が起動しているか\n- ポート番号が正しいか (14552)\n- ファイアウォール設定`
-        }]
-      };
-    } finally {
-      await conn.disconnect();
+      // 接続をクリーンアップ
+      await this.connection.cleanup();
+      
+      // サーバーを停止
+      await this.server.close();
+      
+      console.log('サーバーが正常に停止されました');
+    } catch (error: any) {
+      console.error('サーバー停止エラー:', error);
+      throw error;
     }
   }
 
-  private async takeoff(altitude: number = 10.0): Promise<{ content: Array<{ type: string; text: string }> }> {
-    const conn = new ArduPilotConnection();
-    
-    try {
-      // ハートビート待機（タイムアウト10秒）
-      const status = await conn.connect();
-      if (!status.connected) {
-        return {
-          content: [{
-            type: 'text',
-            text: `エラー: ArduPilotとの接続に失敗しました - ${status.error || '不明なエラー'}`
-          }]
-        };
-      }
-
-      const heartbeatSuccess = await conn.waitHeartbeat(10000);
-      if (!heartbeatSuccess) {
-        return {
-          content: [{
-            type: 'text',
-            text: "エラー: ArduPilotとの接続がタイムアウトしました"
-          }]
-        };
-      }
-
-      // 現在のモードを確認・変更 (実装予定)
-      // const currentMode = await conn.getFlightMode();
-      // if (currentMode !== "GUIDED") {
-      //   await conn.setMode("GUIDED");
-      //   await new Promise(resolve => setTimeout(resolve, 1000));
-      // }
-
-      // アーム処理 (実装予定)
-      // await conn.arm();
-      // await conn.waitMotorsArmed();
-      // await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // 離陸コマンド送信 (実装予定)
-      // const takeoffResult = await conn.sendTakeoffCommand(altitude);
-      // if (!takeoffResult.success) {
-      //   return {
-      //     content: [{
-      //       type: 'text',
-      //       text: "エラー: 離陸コマンドが拒否されました"
-      //     }]
-      //   };
-      // }
-
-      // Placeholder implementation
-      console.log(`Takeoff to ${altitude}m requested`);
-      
-      return {
-        content: [{
-          type: 'text',
-          text: `${altitude}m の高度まで離陸を開始しました。`
-        }]
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        content: [{
-          type: 'text',
-          text: `エラー: ${errorMessage}\n接続設定を確認してください:\n- SITL/実機が起動しているか\n- ポート番号が正しいか (14552)\n- ファイアウォール設定`
-        }]
-      };
-    } finally {
-      await conn.disconnect();
-    }
+  // ヘルパーメソッド
+  getConnectionStatus() {
+    return this.connection.getConnectionStatus();
   }
 
-  private async changeMode(mode: string): Promise<{ content: Array<{ type: string; text: string }> }> {
-    const conn = new ArduPilotConnection();
-    
-    try {
-      const status = await conn.connect();
-      if (!status.connected) {
-        return {
-          content: [{
-            type: 'text',
-            text: `エラー: ArduPilotとの接続に失敗しました - ${status.error || '不明なエラー'}`
-          }]
-        };
-      }
-
-      await conn.waitHeartbeat();
-
-      // Valid flight modes for ArduCopter
-      const validModes = ['GUIDED', 'LAND', 'RTL', 'STABILIZE', 'LOITER', 'AUTO', 'POSHOLD', 'CIRCLE', 'BRAKE'];
-      const requestedMode = mode.toUpperCase();
-      
-      if (!validModes.includes(requestedMode)) {
-        return {
-          content: [{
-            type: 'text',
-            text: `無効なモードです: ${mode}\n利用可能なモード: ${validModes.join(', ')}`
-          }]
-        };
-      }
-
-      // Mode change implementation (placeholder)
-      // const modeId = await conn.getModeId(requestedMode);
-      // if (modeId === null) {
-      //   return {
-      //     content: [{
-      //       type: 'text',
-      //       text: `無効なモードです: ${mode}`
-      //     }]
-      //   };
-      // }
-
-      // await conn.setMode(modeId);
-
-      // Mode change confirmation (placeholder)
-      // const startTime = Date.now();
-      // while (Date.now() - startTime < 5000) {
-      //   const currentMode = await conn.getFlightMode();
-      //   if (currentMode === requestedMode) {
-      //     return {
-      //       content: [{
-      //         type: 'text',
-      //         text: `モードを ${requestedMode} に変更しました。`
-      //       }]
-      //     };
-      //   }
-      //   await new Promise(resolve => setTimeout(resolve, 100));
-      // }
-
-      // Placeholder implementation
-      console.log(`Mode change to ${requestedMode} requested`);
-      
-      return {
-        content: [{
-          type: 'text',
-          text: `モードを ${requestedMode} に変更しました。`
-        }]
-      };
-
-      // For timeout case (placeholder)
-      // return {
-      //   content: [{
-      //     type: 'text',
-      //     text: `警告: モード変更を確認できませんでした (現在のモード: ${currentMode})`
-      //   }]
-      // };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        content: [{
-          type: 'text',
-          text: `エラー: ${errorMessage}\n接続設定を確認してください:\n- SITL/実機が起動しているか\n- ポート番号が正しいか (14552)\n- ファイアウォール設定`
-        }]
-      };
-    } finally {
-      await conn.disconnect();
-    }
-  }
-
-  private async getStatus(): Promise<{ content: Array<{ type: string; text: string }> }> {
-    const conn = new ArduPilotConnection();
-    
-    try {
-      const status = await conn.connect();
-      if (!status.connected) {
-        return {
-          content: [{
-            type: 'text',
-            text: `エラー: ArduPilotとの接続に失敗しました - ${status.error || '不明なエラー'}`
-          }]
-        };
-      }
-
-      await conn.waitHeartbeat();
-
-      // Get vehicle status (placeholder implementation)
-      // const armed = await conn.getMotorsArmed();
-      // const flightMode = await conn.getFlightMode();
-      // const heartbeat = await conn.getHeartbeat();
-      // const systemStatus = heartbeat?.system_status;
-
-      // Placeholder implementation
-      console.log('Status request received');
-      
-      const vehicleStatus = {
-        armed: false, // placeholder
-        mode: "STABILIZE", // placeholder
-        system_status: 4 // MAV_STATE_STANDBY placeholder
-      };
-      
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(vehicleStatus, null, 2)
-        }]
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        content: [{
-          type: 'text',
-          text: `エラー: ${errorMessage}\n接続設定を確認してください:\n- SITL/実機が起動しているか\n- ポート番号が正しいか (14552)\n- ファイアウォール設定`
-        }]
-      };
-    } finally {
-      await conn.disconnect();
-    }
-  }
-
-  private async getPosition(): Promise<{ content: Array<{ type: string; text: string }> }> {
-    const conn = new ArduPilotConnection();
-    
-    try {
-      const status = await conn.connect();
-      if (!status.connected) {
-        return {
-          content: [{
-            type: 'text',
-            text: `エラー: ArduPilotとの接続に失敗しました - ${status.error || '不明なエラー'}`
-          }]
-        };
-      }
-
-      await conn.waitHeartbeat();
-
-      // Get position data (placeholder implementation)
-      // const position = await conn.receiveMessage('GLOBAL_POSITION_INT', 5000);
-      // if (position) {
-      //   const positionData = {
-      //     latitude: position.lat / 1e7,  // Convert from millidegrees to degrees
-      //     longitude: position.lon / 1e7,
-      //     altitude: position.alt / 1000,  // Convert from millimeters to meters
-      //     relative_alt: position.relative_alt / 1000,
-      //     heading: position.hdg / 100,  // Convert to degrees
-      //     velocity: {
-      //       x: position.vx,
-      //       y: position.vy,
-      //       z: position.vz
-      //     }
-      //   };
-      //   return {
-      //     content: [{
-      //       type: 'text',
-      //       text: JSON.stringify(positionData, null, 2)
-      //     }]
-      //   };
-      // }
-
-      // Placeholder implementation
-      console.log('Position request received');
-      
-      const positionData = {
-        latitude: 35.6762, // Tokyo placeholder
-        longitude: 139.6503,
-        altitude: 50.0, // meters
-        relative_alt: 10.0, // meters
-        heading: 90.0, // degrees
-        velocity: {
-          x: 0.0,
-          y: 0.0,
-          z: 0.0
-        }
-      };
-      
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(positionData, null, 2)
-        }]
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        content: [{
-          type: 'text',
-          text: `エラー: ${errorMessage}\n接続設定を確認してください:\n- SITL/実機が起動しているか\n- ポート番号が正しいか (14552)\n- ファイアウォール設定`
-        }]
-      };
-    } finally {
-      await conn.disconnect();
-    }
-  }
-
-  async run(): Promise<void> {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    
-    console.log("MCPサーバーを起動します...");
-    console.log("利用可能なツール: arm, disarm, takeoff, change_mode, get_status, get_position");
-    console.log("クライアントからの接続を待機中...");
+  async reconnect(): Promise<void> {
+    await this.connection.cleanup();
+    await this.connection.connect();
   }
 }

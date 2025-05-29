@@ -23,7 +23,8 @@ coverage/
 node_modules/
 jspm_packages/
 
-# TypeScript cache
+# TypeScript compiled output
+dist/
 *.tsbuildinfo
 
 # Optional npm cache directory

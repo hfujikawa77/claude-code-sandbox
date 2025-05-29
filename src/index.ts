@@ -1,18 +1,28 @@
 import { ArduPilotMcpServer } from './mcp-server.js';
 
-// ArduPilot MCP Server in TypeScript
-console.log("ArduPilot MCP Server - TypeScript version");
-
 async function main(): Promise<void> {
+  const server = new ArduPilotMcpServer();
+  
+  // プロセス終了時の処理
+  process.on('SIGINT', async () => {
+    await server.stop();
+    process.exit(0);
+  });
+
+  process.on('SIGTERM', async () => {
+    await server.stop();
+    process.exit(0);
+  });
+
   try {
-    const server = new ArduPilotMcpServer();
-    await server.run();
+    await server.start();
   } catch (error) {
-    console.error("MCPサーバーエラー:", error);
+    console.error('サーバー開始エラー:', error);
     process.exit(1);
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch(console.error);
-}
+main().catch((error) => {
+  console.error('予期しないエラー:', error);
+  process.exit(1);
+});
