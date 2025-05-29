@@ -145,7 +145,7 @@ export class ArduPilotConnection extends EventEmitter {
       const heartbeat = new minimal.Heartbeat();
       heartbeat.type = minimal.MavType.GCS; // Ground Control Station
       heartbeat.autopilot = minimal.MavAutopilot.INVALID;
-      heartbeat.baseMode = 0;
+      heartbeat.baseMode = minimal.MavModeFlag.CUSTOM_MODE_ENABLED;
       heartbeat.customMode = 0;
       heartbeat.systemStatus = minimal.MavState.ACTIVE;
       heartbeat.mavlinkVersion = 3;
