@@ -33,3 +33,15 @@ export interface VehicleStatus {
   mode: string;
   systemStatus?: number;
 }
+
+export interface FlightMode {
+  name: string;
+  id: number;
+}
+
+export interface ModeChangeResult {
+  success: boolean;
+  currentMode: string;
+  requestedMode: string;
+  message: string;
+}
