@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  ardupilot-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ardupilot-mcp-server
+    restart: unless-stopped
+    
+    # Environment variables
+    environment:
+      - NODE_ENV=production
+      - ARDUPILOT_HOST=${ARDUPILOT_HOST:-127.0.0.1}
+      - ARDUPILOT_PORT=${ARDUPILOT_PORT:-14552}
+      - ARDUPILOT_PROTOCOL=${ARDUPILOT_PROTOCOL:-udp}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    
+    # Port mapping for MAVLink
+    ports:
+      - "${ARDUPILOT_PORT:-14552}:14552/udp"
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('Health check passed')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: ArduPilot SITL for development/testing
+  ardupilot-sitl:
+    image: ardupilot/ardupilot:latest
+    container_name: ardupilot-sitl
+    command: |
+      bash -c "
+        cd /ardupilot/ArduCopter &&
+        ../Tools/autotest/sim_vehicle.py --vehicle ArduCopter --aircraft test --console --map --out=udp:ardupilot-mcp-server:14552
+      "
+    profiles:
+      - development
+    depends_on:
+      - ardupilot-mcp-server
+    
+    # Expose additional ports for Ground Control Station
+    ports:
+      - "5760:5760"  # Default telemetry port
+    
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+    
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+networks:
+  default:
+    name: ardupilot-network

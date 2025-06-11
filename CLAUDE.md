@@ -171,3 +171,16 @@ GitHub Actions workflow (.github/workflows/ci.yml) includes:
 - Heartbeat Interval: 1 second
 - Default Timeout: 10 seconds
 - Auto-reconnect: Enabled with configurable max attempts
+
+## Project Workflow Rules
+
+### Issue Management
+- All issue work results MUST be documented in the corresponding GitHub issue
+- Include detailed summaries of changes, implementation decisions, and testing results
+- Document any challenges encountered and their solutions
+
+### Pull Request Requirements
+- Upon completion of any issue work, a Pull Request MUST be created
+- PRs must reference the related issue number
+- Include clear description of changes and testing performed
+- Ensure all CI/CD checks pass before requesting review
