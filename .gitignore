@@ -155,3 +155,6 @@ dmypy.json
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Claude
+.Claude
